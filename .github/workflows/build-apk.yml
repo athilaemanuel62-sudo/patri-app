@@ -1,4 +1,4 @@
-name: Build PATRI APK
+name: Build PATRI APK - TWA
 
 on:
   workflow_dispatch:
@@ -20,7 +20,7 @@ jobs:
           unzip -o PATRI_Android_projeto_v7_3_8.zip
           test -f patri_android/settings.gradle
 
-      - name: Corrigir abertura do PATRI
+      - name: Restaurar MainActivity com TWA
         working-directory: patri_android
         run: |
           cat > app/src/main/java/br/com/patri/app/MainActivity.java <<'EOF'
@@ -29,21 +29,60 @@ jobs:
           import android.app.Activity;
           import android.os.Bundle;
           import android.net.Uri;
-          import androidx.browser.customtabs.CustomTabsIntent;
+          import androidx.browser.customtabs.CustomTabsCallback;
+          import androidx.browser.customtabs.CustomTabsClient;
+          import androidx.browser.customtabs.CustomTabsServiceConnection;
+          import androidx.browser.customtabs.CustomTabsSession;
+          import androidx.browser.trusted.TrustedWebActivityIntentBuilder;
 
           public class MainActivity extends Activity {
               private static final String START_URL = "https://admgestao.netlify.app/";
+              private CustomTabsClient client;
+              private CustomTabsSession session;
 
               @Override protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
+                  launchPatri();
+              }
+
+              private void launchPatri() {
+                  CustomTabsClient.bindCustomTabsService(
+                      this,
+                      "com.android.chrome",
+                      new CustomTabsServiceConnection() {
+                          @Override
+                          public void onCustomTabsServiceConnected(
+                                  android.content.ComponentName name,
+                                  CustomTabsClient c) {
+                              client = c;
+                              client.warmup(0L);
+                              session = client.newSession(new CustomTabsCallback());
+                              openTwa();
+                          }
+
+                          @Override
+                          public void onServiceDisconnected(
+                                  android.content.ComponentName name) {
+                              client = null;
+                              session = null;
+                          }
+                      }
+                  );
+              }
+
+              private void openTwa() {
                   try {
-                      CustomTabsIntent intent = new CustomTabsIntent.Builder().build();
-                      intent.launchUrl(this, Uri.parse(START_URL));
+                      new TrustedWebActivityIntentBuilder(Uri.parse(START_URL))
+                          .setScreenOrientation(
+                              androidx.browser.trusted.ScreenOrientation.PORTRAIT)
+                          .build(session)
+                          .launchTrustedWebActivity(this);
                   } catch (Exception e) {
-                      startActivity(new android.content.Intent(
+                      android.content.Intent intent =
+                          new android.content.Intent(
                               android.content.Intent.ACTION_VIEW,
-                              Uri.parse(START_URL)
-                      ));
+                              Uri.parse(START_URL));
+                      startActivity(intent);
                   }
               }
           }
@@ -64,16 +103,25 @@ jobs:
         working-directory: patri_android
         run: gradle assembleDebug --no-daemon
 
-      - name: Verificar assinatura Android
+      - name: Verificar assinatura e obter SHA-256
         working-directory: patri_android
         run: |
           APK=app/build/outputs/apk/debug/app-debug.apk
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
           test -n "$APKSIGNER"
           "$APKSIGNER" verify --verbose "$APK"
+          echo "===== SHA-256 DA ASSINATURA DO APK ====="
+          "$APKSIGNER" verify --print-certs "$APK" || true
+          echo "===== FIM DO SHA-256 ====="
+
+      - name: Verificar APK gerado
+        working-directory: patri_android
+        run: |
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          ls -lh app/build/outputs/apk/debug/app-debug.apk
 
       - name: Disponibilizar APK
         uses: actions/upload-artifact@v4
         with:
-          name: PATRI-debug-apk-corrigido
+          name: PATRI-TWA-debug-apk
           path: patri_android/app/build/outputs/apk/debug/app-debug.apk
