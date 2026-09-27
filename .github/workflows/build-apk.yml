@@ -20,6 +20,35 @@ jobs:
           unzip -o PATRI_Android_projeto_v7_3_8.zip
           test -f patri_android/settings.gradle
 
+      - name: Corrigir abertura do PATRI
+        working-directory: patri_android
+        run: |
+          cat > app/src/main/java/br/com/patri/app/MainActivity.java <<'EOF'
+          package br.com.patri.app;
+
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.net.Uri;
+          import androidx.browser.customtabs.CustomTabsIntent;
+
+          public class MainActivity extends Activity {
+              private static final String START_URL = "https://admgestao.netlify.app/";
+
+              @Override protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  try {
+                      CustomTabsIntent intent = new CustomTabsIntent.Builder().build();
+                      intent.launchUrl(this, Uri.parse(START_URL));
+                  } catch (Exception e) {
+                      startActivity(new android.content.Intent(
+                              android.content.Intent.ACTION_VIEW,
+                              Uri.parse(START_URL)
+                      ));
+                  }
+              }
+          }
+          EOF
+
       - name: Configurar Java
         uses: actions/setup-java@v4
         with:
@@ -46,5 +75,5 @@ jobs:
       - name: Disponibilizar APK
         uses: actions/upload-artifact@v4
         with:
-          name: PATRI-debug-apk
+          name: PATRI-debug-apk-corrigido
           path: patri_android/app/build/outputs/apk/debug/app-debug.apk
