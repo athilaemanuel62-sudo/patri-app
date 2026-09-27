@@ -1,1 +1,180 @@
+name: Build PATRI APK - TWA Release
 
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Baixar projeto
+        uses: actions/checkout@v4
+
+      - name: Preparar projeto Android
+        run: |
+          rm -rf patri_android
+          unzip -o PATRI_Android_projeto_v7_3_8.zip
+          test -f patri_android/settings.gradle
+
+      - name: Preparar chave de assinatura
+        env:
+          PATRI_KEYSTORE_B64: ${{ secrets.PATRI_KEYSTORE_B64 }}
+        run: |
+          test -n "$PATRI_KEYSTORE_B64"
+          printf '%s' "$PATRI_KEYSTORE_B64" | base64 --decode > patri-release-key.jks
+          test -s patri-release-key.jks
+
+      - name: Configurar assinatura Release
+        working-directory: patri_android
+        env:
+          PATRI_KEYSTORE_PASSWORD: ${{ secrets.PATRI_KEYSTORE_PASSWORD }}
+          PATRI_KEY_ALIAS: ${{ secrets.PATRI_KEY_ALIAS }}
+          PATRI_KEY_PASSWORD: ${{ secrets.PATRI_KEY_PASSWORD }}
+        run: |
+          cat > app/build.gradle <<'EOF'
+          plugins { id 'com.android.application' }
+
+          android {
+              namespace 'br.com.patri.app'
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId 'br.com.patri.app'
+                  minSdk 23
+                  targetSdk 35
+                  versionCode 1
+                  versionName '1.0.0'
+              }
+
+              signingConfigs {
+                  release {
+                      storeFile file('../patri-release-key.jks')
+                      storePassword System.getenv('PATRI_KEYSTORE_PASSWORD')
+                      keyAlias System.getenv('PATRI_KEY_ALIAS')
+                      keyPassword System.getenv('PATRI_KEY_PASSWORD')
+                  }
+              }
+
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.release
+                      minifyEnabled false
+                  }
+              }
+          }
+
+          dependencies {
+              implementation 'androidx.browser:browser:1.8.0'
+          }
+          EOF
+
+      - name: Restaurar MainActivity com TWA
+        working-directory: patri_android
+        run: |
+          cat > app/src/main/java/br/com/patri/app/MainActivity.java <<'EOF'
+          package br.com.patri.app;
+
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.net.Uri;
+          import androidx.browser.customtabs.CustomTabsCallback;
+          import androidx.browser.customtabs.CustomTabsClient;
+          import androidx.browser.customtabs.CustomTabsServiceConnection;
+          import androidx.browser.customtabs.CustomTabsSession;
+          import androidx.browser.trusted.TrustedWebActivityIntentBuilder;
+
+          public class MainActivity extends Activity {
+              private static final String START_URL = "https://admgestao.netlify.app/";
+              private CustomTabsClient client;
+              private CustomTabsSession session;
+
+              @Override protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  launchPatri();
+              }
+
+              private void launchPatri() {
+                  CustomTabsClient.bindCustomTabsService(
+                      this,
+                      "com.android.chrome",
+                      new CustomTabsServiceConnection() {
+                          @Override
+                          public void onCustomTabsServiceConnected(
+                                  android.content.ComponentName name,
+                                  CustomTabsClient c) {
+                              client = c;
+                              client.warmup(0L);
+                              session = client.newSession(new CustomTabsCallback());
+                              openTwa();
+                          }
+
+                          @Override
+                          public void onServiceDisconnected(
+                                  android.content.ComponentName name) {
+                              client = null;
+                              session = null;
+                          }
+                      }
+                  );
+              }
+
+              private void openTwa() {
+                  try {
+                      new TrustedWebActivityIntentBuilder(Uri.parse(START_URL))
+                          .setScreenOrientation(
+                              androidx.browser.trusted.ScreenOrientation.PORTRAIT)
+                          .build(session)
+                          .launchTrustedWebActivity(this);
+                  } catch (Exception e) {
+                      android.content.Intent intent =
+                          new android.content.Intent(
+                              android.content.Intent.ACTION_VIEW,
+                              Uri.parse(START_URL));
+                      startActivity(intent);
+                  }
+              }
+          }
+          EOF
+
+      - name: Configurar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Configurar Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Compilar APK Release
+        working-directory: patri_android
+        env:
+          PATRI_KEYSTORE_PASSWORD: ${{ secrets.PATRI_KEYSTORE_PASSWORD }}
+          PATRI_KEY_ALIAS: ${{ secrets.PATRI_KEY_ALIAS }}
+          PATRI_KEY_PASSWORD: ${{ secrets.PATRI_KEY_PASSWORD }}
+        run: gradle assembleRelease --no-daemon
+
+      - name: Verificar assinatura e SHA-256
+        working-directory: patri_android
+        run: |
+          APK=app/build/outputs/apk/release/app-release.apk
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
+          test -n "$APKSIGNER"
+          "$APKSIGNER" verify --verbose "$APK"
+          echo "===== SHA-256 DA ASSINATURA DO APK ====="
+          "$APKSIGNER" verify --print-certs "$APK"
+          echo "===== FIM DO SHA-256 ====="
+
+      - name: Verificar APK gerado
+        working-directory: patri_android
+        run: |
+          test -s app/build/outputs/apk/release/app-release.apk
+          ls -lh app/build/outputs/apk/release/app-release.apk
+
+      - name: Disponibilizar APK Release
+        uses: actions/upload-artifact@v4
+        with:
+          name: PATRI-TWA-release
+          path: patri_android/app/build/outputs/apk/release/app-release.apk
