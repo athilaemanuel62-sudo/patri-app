@@ -16,8 +16,9 @@ jobs:
 
       - name: Preparar projeto Android
         run: |
-          unzip -o PATRI_Android_projeto_v7_3_8.zip -d .
-          cd patri_android
+          rm -rf patri_android
+          unzip -o PATRI_Android_projeto_v7_3_8.zip
+          test -f patri_android/settings.gradle
 
       - name: Configurar Java
         uses: actions/setup-java@v4
@@ -34,8 +35,16 @@ jobs:
         working-directory: patri_android
         run: gradle assembleDebug --no-daemon
 
+      - name: Verificar assinatura Android
+        working-directory: patri_android
+        run: |
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
+          test -n "$APKSIGNER"
+          "$APKSIGNER" verify --verbose "$APK"
+
       - name: Disponibilizar APK
         uses: actions/upload-artifact@v4
         with:
-          name: PATRI-debug
+          name: PATRI-debug-apk
           path: patri_android/app/build/outputs/apk/debug/app-debug.apk
