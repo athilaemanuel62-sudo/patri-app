@@ -19,6 +19,40 @@ jobs:
           rm -rf patri_android
           unzip -o PATRI_Android_projeto_v7_3_8.zip
           test -f patri_android/settings.gradle
+          test -f patri_android/app/build.gradle
+
+      - name: Preparar keystore de produção
+        working-directory: patri_android
+        env:
+          PATRI_KEYSTORE_B64: ${{ secrets.PATRI_KEYSTORE_B64 }}
+        run: |
+          echo "$PATRI_KEYSTORE_B64" | base64 --decode > patri-release.keystore
+          test -s patri-release.keystore
+
+      - name: Configurar assinatura Release
+        working-directory: patri_android
+        run: |
+          cat >> app/build.gradle <<'EOF'
+
+          android {
+              signingConfigs {
+                  patriRelease {
+                      storeFile file("../patri-release.keystore")
+                      storePassword System.getenv("PATRI_KEYSTORE_PASSWORD")
+                      keyAlias System.getenv("PATRI_KEY_ALIAS")
+                      keyPassword System.getenv("PATRI_KEY_PASSWORD")
+                  }
+              }
+
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.patriRelease
+                      minifyEnabled false
+                      shrinkResources false
+                  }
+              }
+          }
+          EOF
 
       - name: Restaurar MainActivity com TWA
         working-directory: patri_android
@@ -36,11 +70,15 @@ jobs:
           import androidx.browser.trusted.TrustedWebActivityIntentBuilder;
 
           public class MainActivity extends Activity {
-              private static final String START_URL = "https://admgestao.netlify.app/";
+
+              private static final String START_URL =
+                      "https://admgestao.netlify.app/";
+
               private CustomTabsClient client;
               private CustomTabsSession session;
 
-              @Override protected void onCreate(Bundle savedInstanceState) {
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
                   launchPatri();
               }
@@ -50,13 +88,15 @@ jobs:
                       this,
                       "com.android.chrome",
                       new CustomTabsServiceConnection() {
+
                           @Override
                           public void onCustomTabsServiceConnected(
                                   android.content.ComponentName name,
                                   CustomTabsClient c) {
                               client = c;
                               client.warmup(0L);
-                              session = client.newSession(new CustomTabsCallback());
+                              session = client.newSession(
+                                      new CustomTabsCallback());
                               openTwa();
                           }
 
@@ -72,16 +112,19 @@ jobs:
 
               private void openTwa() {
                   try {
-                      new TrustedWebActivityIntentBuilder(Uri.parse(START_URL))
+                      new TrustedWebActivityIntentBuilder(
+                              Uri.parse(START_URL))
                           .setScreenOrientation(
                               androidx.browser.trusted.ScreenOrientation.PORTRAIT)
                           .build(session)
                           .launchTrustedWebActivity(this);
+
                   } catch (Exception e) {
                       android.content.Intent intent =
                           new android.content.Intent(
                               android.content.Intent.ACTION_VIEW,
                               Uri.parse(START_URL));
+
                       startActivity(intent);
                   }
               }
@@ -99,29 +142,39 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Compilar APK
+      - name: Compilar APK Release
         working-directory: patri_android
-        run: gradle assembleDebug --no-daemon
+        env:
+          PATRI_KEYSTORE_PASSWORD: ${{ secrets.PATRI_KEYSTORE_PASSWORD }}
+          PATRI_KEY_ALIAS: ${{ secrets.PATRI_KEY_ALIAS }}
+          PATRI_KEY_PASSWORD: ${{ secrets.PATRI_KEY_PASSWORD }}
+        run: |
+          gradle assembleRelease --no-daemon
 
       - name: Verificar assinatura e obter SHA-256
         working-directory: patri_android
         run: |
-          APK=app/build/outputs/apk/debug/app-debug.apk
-          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
+          APK=app/build/outputs/apk/release/app-release.apk
+
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" \
+            -type f -name apksigner | sort -V | tail -1)
+
           test -n "$APKSIGNER"
+
           "$APKSIGNER" verify --verbose "$APK"
+
           echo "===== SHA-256 DA ASSINATURA DO APK ====="
-          "$APKSIGNER" verify --print-certs "$APK" || true
+          "$APKSIGNER" verify --print-certs "$APK"
           echo "===== FIM DO SHA-256 ====="
 
       - name: Verificar APK gerado
         working-directory: patri_android
         run: |
-          test -s app/build/outputs/apk/debug/app-debug.apk
-          ls -lh app/build/outputs/apk/debug/app-debug.apk
+          test -s app/build/outputs/apk/release/app-release.apk
+          ls -lh app/build/outputs/apk/release/app-release.apk
 
       - name: Disponibilizar APK
         uses: actions/upload-artifact@v4
         with:
-          name: PATRI-TWA-debug-apk
-          path: patri_android/app/build/outputs/apk/debug/app-debug.apk
+          name: PATRI-TWA-release-apk
+          path: patri_android/app/build/outputs/apk/release/app-release.apk
